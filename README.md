@@ -1,4 +1,4 @@
-# 🖼️ Wall Display
+# Wall Display
 
 ![Language](https://img.shields.io/github/languages/top/agslima/wall-display?style=flat-square)
 ![License](https://img.shields.io/github/license/agslima/wall-display?style=flat-square)
@@ -9,7 +9,7 @@ Projeto simples em **Python** criado para exibir imagens (ou conteúdos visuais)
 
 ---
 
-## 🧠 Funcionalidades
+## Funcionalidades
 
 - Interface fullscreen automática (usando `pygame`)
 - Transição com **fade in/fade out** entre imagens
@@ -19,7 +19,7 @@ Projeto simples em **Python** criado para exibir imagens (ou conteúdos visuais)
 
 ---
 
-## 📂 Estrutura esperada
+## Estrutura esperada
 
 O programa espera uma pasta chamada `menu-data/` com um arquivo `menu.data` no seguinte formato:
 
