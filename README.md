@@ -14,7 +14,7 @@ It handles smooth visual transitions, dynamic content loading, and automated sli
 
 ![Wall Display Running](https://via.placeholder.com/800x400.png?text=Place+Your+Screenshot+or+GIF+Here)
 
-> *The system displaying the "Events" category with the sidebar menu active.*
+> *The system is displaying the "Events" category with the sidebar menu active.*
 
 ---
 
@@ -68,6 +68,7 @@ The application expects a directory (default: `menu-data/`) containing a `menu.d
       ├── menu.data
       ├── events/      (contains .jpg files)
       └── notices/     (contains .jpg files)
+---
 
 ## Controls
 
@@ -82,11 +83,15 @@ The application is designed to be controlled via a standard keyboard or a mapped
 | **P** | Pause/Resume Auto-Slideshow |
 | **ESC / Q** | Quit Application |
 
+---
+
 ## Tech Stack
 
 * **Language:** Python 3
 * **Graphics Engine:** Pygame - Handles rendering and window management.
 * **Data Handling:** Native CSV and Pathlib libraries.
+
+---
 
 ## License
 
