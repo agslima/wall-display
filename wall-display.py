@@ -1,293 +1,329 @@
+
 # ***************************************************************************
-# * *
 # * This program is free software; you can redistribute it and/or modify  *
 # * it under the terms of the GNU General Public License as published by  *
 # * the Free Software Foundation; either version 2 of the License, or     *
 # * (at your option) any later version.                                   *
-# * *
-# * This program is distributed in the hope that it will be useful,       *
-# * but WITHOUT ANY WARRANTY; without even the implied warranty of        *
-# * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
-# * GNU General Public License for more details.                          *
-# * *
-# * You should have received a copy of the GNU General Public License.    *
-# *	along with this program. If not, see <http://www.gnu.org/licenses/>.  *
-# **
 # ***************************************************************************
 
 import pygame
 import sys
-import os
 import csv
-from time import sleep
+import logging
+import argparse
+from pathlib import Path
+from dataclasses import dataclass, field
+from typing import List, Tuple, Dict, Optional, Any
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+@dataclass
+class MenuItem:
+    id: int
+    directory: Path
+    menu_name: str
+    description: str
+    images: List[Tuple[str, pygame.Surface, pygame.Surface]] = field(default_factory=list)
+    menu_surface: Optional[pygame.Surface] = None
 
 class WallDisplayApp:
     """
-    Main application class for the wall display program.
-    Handles all UI, data loading, and event processing.
+    Main application class for the Wall Display program.
+    Handles UI rendering, data loading, and event processing logic.
     """
-    def __init__(self, menu_data_dir="menu-data"):
-        """Initializes the application and Pygame."""
-        pygame.init()
-        pygame.mouse.set_visible(0)
 
-        # UI constants
-        self.DISP_INFO = pygame.display.Info()
-        self.DISP_W = self.DISP_INFO.current_w
-        self.DISP_H = self.DISP_INFO.current_h
-        self.MENU_WIDTH = 205
-        self.MENU_HEIGHT = self.DISP_H
+    # Constants
+    MENU_WIDTH = 205
+    AUTO_FRAME_DELAY_MS = 15000  # 15 seconds
+    AUTO_START_DELAY_MS = 20000  # 20 seconds
+    FONT_COLOR_ACTIVE = (255, 255, 255)
+    FONT_COLOR_INACTIVE = (150, 150, 150)
+    BG_COLOR = (0, 0, 0)
 
-        # Application state variables
-        self.screen = None
-        self.menu_data_dir = menu_data_dir
-        self.verbln = 0
-        self.menu = []
-        self.current_menu_item = {}
-        self.auto_list = []
-        self.right_frame_previous = None
+    def __init__(self, menu_data_dir: str = "menu-data"):
+        """
+        Initializes the application, Pygame, and display settings.
         
-        # Auto mode timings (in milliseconds)
-        self.AUTO_FRAME_DELAY = 15000  # 15s
-        self.AUTO_START_DELAY = 20000  # 20s
+        Args:
+            menu_data_dir (str): Path to the directory containing menu.data and images.
+        """
+        pygame.init()
+        pygame.mouse.set_visible(False)
 
-        self.setup_display()
+        # UI Layout
+        self.disp_info = pygame.display.Info()
+        self.disp_w = self.disp_info.current_w
+        self.disp_h = self.disp_info.current_h
+        self.menu_height = self.disp_h
 
-    def setup_display(self):
-        """Sets up the display and loads initial data."""
+        # State
+        self.screen: Optional[pygame.Surface] = None
+        self.menu_data_path = Path(menu_data_dir)
+        self.verbose_line_y = 0
+        self.menu_items: List[MenuItem] = []
+        self.current_item_index = 0
+        self.auto_image_list: List[Tuple[str, pygame.Surface, pygame.Surface]] = []
+        self.right_frame_previous: Optional[pygame.Surface] = None
+
+        self._setup_display()
+
+    def _setup_display(self) -> None:
+        """Sets up the display surface and loads initial data."""
         try:
             self.screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
-            self._verbose_msg(f"Setting screen mode: ({self.DISP_W},{self.DISP_H})")
-            
-            self.menu = self._load_menu()
-            if not self.menu:
-                self._verbose_msg("No menu items found.")
-                sys.exit(0)
-            
-            self.current_menu_item = self.menu[0]
-            self.auto_list = self.current_menu_item["imgs"]
-            self.right_frame_previous = self.auto_list[0][2]
-        
-        except (IOError, pygame.error) as e:
-            self.fatal(1, f"Error setting up wall display: {e}")
-        except Exception as e:
-            self.fatal(1, f"An unexpected error occurred during setup: {e}")
-            
-        self.verbose_clean()
-        self.update_menu()
-        self.start_auto_mode()
+            self._verbose_msg(f"Initializing display: ({self.disp_w}x{self.disp_h})")
 
-    def _verbose_msg(self, msg):
-        """Prints a verbose message on the screen."""
-        f32 = pygame.font.Font(None, 32)
-        font_height = f32.get_height()
-        left_margin = 10
-        surf_msg = f32.render(msg, True, (50, 50, 50))
-        self.screen.blit(surf_msg, (left_margin, self.verbln))
-        self.verbln += font_height
+            self.menu_items = self._load_menu()
+            if not self.menu_items:
+                logging.error("No menu items loaded.")
+                sys.exit(0)
+
+            # Initialize state with first item
+            self.current_item = self.menu_items[0]
+            self.auto_image_list = self.current_item.images
+            
+            if self.auto_image_list:
+                self.right_frame_previous = self.auto_image_list[0][2]
+
+        except pygame.error as e:
+            self._fatal_error(1, f"Pygame initialization failed: {e}")
+        except Exception as e:
+            self._fatal_error(1, f"Unexpected error during setup: {e}")
+
+        self._clear_verbose_screen()
+        self._draw_menu()
+        self._start_auto_timer()
+
+    def _verbose_msg(self, msg: str) -> None:
+        """Renders a status message directly to the screen during loading."""
+        logging.info(msg)
+        if not self.screen:
+            return
+
+        font = pygame.font.Font(None, 32)
+        font_height = font.get_height()
+        surface = font.render(msg, True, (50, 50, 50))
+        
+        self.screen.blit(surface, (10, self.verbose_line_y))
+        self.verbose_line_y += font_height
         pygame.display.flip()
 
-    def fatal(self, status, msg):
-        """Prints a fatal error message and exits."""
-        sys.stderr.write(f"FATAL: {msg}\n")
+    def _clear_verbose_screen(self) -> None:
+        """Clears the loading/verbose text."""
+        self.verbose_line_y = 0
+        background = pygame.Surface(self.screen.get_size()).convert()
+        background.fill(self.BG_COLOR)
+        self.screen.blit(background, (0, 0))
+
+    def _fatal_error(self, status: int, msg: str) -> None:
+        """Logs a fatal error and exits the application."""
+        logging.critical(f"FATAL: {msg}")
         pygame.quit()
         sys.exit(status)
 
-    def verbose_clean(self):
-        """Clears the verbose message area."""
-        self.verbln = 0
-        backgnd = pygame.Surface(self.screen.get_size()).convert()
-        backgnd.fill((0, 0, 0))
-        self.screen.blit(backgnd, (0, 0))
-
-    def update_menu(self):
-        """Redraws the menu on the screen."""
-        if self.menu and self.menu[0]["menuimg"]:
-            self.screen.blit(self.menu[0]["menuimg"], (0, 0))
+    def _draw_menu(self) -> None:
+        """Draws the current menu sidebar."""
+        current = self.menu_items[self.current_item_index]
+        if current.menu_surface:
+            self.screen.blit(current.menu_surface, (0, 0))
             pygame.display.flip()
 
-    def _load_menu_data(self):
-        """Loads menu entries from the menu.data file."""
-        fn = os.path.join(self.menu_data_dir, "menu.data")
-        menu_entries = []
+    def _load_menu_data_file(self) -> List[Dict[str, Any]]:
+        """Parses the menu.data CSV file."""
+        file_path = self.menu_data_path / "menu.data"
+        entries = []
+
+        if not file_path.exists():
+            self._fatal_error(1, f"Menu data file not found: {file_path}")
+
         try:
-            with open(fn, 'r', encoding='utf-8') as csvfile:
-                reader = csv.reader(csvfile, delimiter=':')
+            with file_path.open('r', encoding='utf-8') as f:
+                reader = csv.reader(f, delimiter=':')
                 for row in reader:
+                    # Format: ID:DIR:ENABLED:NAME:DESC
                     if len(row) > 3 and int(row[2]) == 1:
-                        d = {
+                        entries.append({
                             "id": int(row[0].strip()),
                             "dir": row[1].strip(),
-                            "menu": row[3].strip(),
-                            "desc": row[4].strip()
-                        }
-                        menu_entries.append(d)
+                            "name": row[3].strip(),
+                            "desc": row[4].strip() if len(row) > 4 else ""
+                        })
         except IOError as e:
-            self.fatal(1, f"Could not open menu data file: {e}")
-        return menu_entries
-
-    def _load_menu(self):
-        """Loads all menu data, including images and menu visuals."""
-        self._verbose_msg("Reading menu info...")
-        menu_entries = self._load_menu_data()
-        self._verbose_msg("Reading menu info... [Done]")
+            self._fatal_error(1, f"Could not read menu file: {e}")
         
-        menu_list_data = [(item["id"], item["menu"]) for item in menu_entries]
-        
-        loaded_menu = []
-        for menu_item in menu_entries:
-            self._verbose_msg(f"Reading image files for menu entry: {menu_item['menu']}")
-            img_list = self._read_jpg_files(menu_item["dir"])
-            self._verbose_msg(f"Reading image files for menu entry: {menu_item['menu']} [Done]")
-            menu_item["imgs"] = img_list
-            
-            menu_img = pygame.Surface((self.MENU_WIDTH, self.MENU_HEIGHT)).convert()
-            menu_img.fill((0, 0, 0))
-            
-            menu_font = pygame.font.SysFont("gillsansmt", 20, bold=False)
-            font_height = menu_font.get_height()
-            left_margin = 10
-            vertical_padding = 40
-            line_pos = vertical_padding
-            
-            for menu_id, name in menu_list_data:
-                font_color = (255, 255, 255) if menu_id == menu_item["id"] else (150, 150, 150)
-                surf_msg = menu_font.render(name, True, font_color)
-                menu_img.blit(surf_msg, (left_margin, line_pos))
-                line_pos += font_height + vertical_padding
-            
-            menu_item["menuimg"] = menu_img
-            loaded_menu.append(menu_item)
-            
-        return loaded_menu
+        return entries
 
-    def _read_jpg_files(self, dirname):
-        """Reads JPG files from a directory and converts them to Pygame surfaces."""
-        print(f"listing dir: [{dirname}]")
+    def _load_menu(self) -> List[MenuItem]:
+        """Loads images and generates surfaces for all menu items."""
+        self._verbose_msg("Loading menu configuration...")
+        raw_data = self._load_menu_data_file()
+        
+        loaded_items = []
+        
+        for entry in raw_data:
+            self._verbose_msg(f"Processing category: {entry['name']}")
+            
+            # Resolve image directory relative to menu_data_path
+            img_dir = self.menu_data_path / entry['dir']
+            images = self._load_images_from_dir(img_dir)
+            
+            menu_item = MenuItem(
+                id=entry['id'],
+                directory=img_dir,
+                menu_name=entry['name'],
+                description=entry['desc'],
+                images=images
+            )
+
+            # Pre-render the menu sidebar for this state
+            menu_item.menu_surface = self._generate_menu_surface(entry['id'], raw_data)
+            loaded_items.append(menu_item)
+
+        self._verbose_msg("Loading complete.")
+        return loaded_items
+
+    def _generate_menu_surface(self, active_id: int, all_entries: List[Dict]) -> pygame.Surface:
+        """Generates the static sidebar surface for a specific active state."""
+        surface = pygame.Surface((self.MENU_WIDTH, self.menu_height)).convert()
+        surface.fill(self.BG_COLOR)
+        
+        font = pygame.font.SysFont("gillsansmt", 20, bold=False)
+        font_height = font.get_height()
+        
+        y_pos = 40
+        left_margin = 10
+        vertical_padding = 40
+
+        for entry in all_entries:
+            color = self.FONT_COLOR_ACTIVE if entry['id'] == active_id else self.FONT_COLOR_INACTIVE
+            text_surf = font.render(entry['name'], True, color)
+            surface.blit(text_surf, (left_margin, y_pos))
+            y_pos += font_height + vertical_padding
+            
+        return surface
+
+    def _load_images_from_dir(self, directory: Path) -> List[Tuple[str, pygame.Surface, pygame.Surface]]:
+        """Loads valid JPG images from a directory."""
         img_list = []
-        try:
-            fn_lst = sorted(os.listdir(dirname))
-            for fn in fn_lst:
-                if fn.lower().endswith(('.jpg', '.jpeg')):
-                    try:
-                        img = pygame.image.load(os.path.join(dirname, fn)).convert()
-                        back = self._img_to_back(img)
-                        img_list.append((fn, img, back))
-                    except pygame.error:
-                        print(f"Warning: Could not load image file {fn}")
-        except FileNotFoundError:
-            print(f"Warning: Directory not found: {dirname}")
-        except Exception as e:
-            print(f"An error occurred while reading images from '{dirname}': {e}")
+        if not directory.exists():
+            logging.warning(f"Directory not found: {directory}")
+            return img_list
+
+        files = sorted([f for f in directory.iterdir() if f.suffix.lower() in ('.jpg', '.jpeg')])
+        
+        for file_path in files:
+            try:
+                img = pygame.image.load(str(file_path)).convert()
+                background = pygame.Surface(img.get_size()).convert()
+                background.blit(img, (0, 0))
+                img_list.append((file_path.name, img, background))
+            except pygame.error:
+                logging.warning(f"Skipping invalid image: {file_path.name}")
+        
         return img_list
 
-    def _img_to_back(self, img):
-        """Creates a background surface from an image."""
-        back = pygame.Surface(img.get_size()).convert()
-        back.blit(img, (0, 0))
-        return back
-
-    def _fade_out(self, img):
-        """Fades out a Pygame surface."""
-        for i in range(250, -1, -25):
-            backgnd = pygame.Surface(self.screen.get_size()).convert()
-            backgnd.fill((0, 0, 0))
-            img.set_alpha(i)
-            self.screen.blit(img, (self.MENU_WIDTH, 0))
-            pygame.display.flip()
-            pygame.time.delay(20)
-
-    def _fade_in(self, img):
-        """Fades in a Pygame surface."""
-        for i in range(0, 250, 25):
-            backgnd = pygame.Surface(self.screen.get_size()).convert()
-            backgnd.fill((0, 0, 0))
-            img.set_alpha(i)
-            self.screen.blit(img, (self.MENU_WIDTH, 0))
-            pygame.display.flip()
-            pygame.time.delay(20)
-
-    def _rotate_left(self, lst):
-        """Rotates a list to the left."""
-        if lst:
-            i = lst.pop(0)
-            lst.append(i)
-
-    def _rotate_right(self, lst):
-        """Rotates a list to the right."""
-        if lst:
-            i = lst.pop()
-            lst.insert(0, i)
-
-    def _update_right_frame(self, img):
-        """Updates the right-side image frame with a fade effect."""
-        self._fade_out(self.right_frame_previous)
-        self.right_frame_previous = img[2]
-        self._fade_in(self.right_frame_previous)
-
-    def start_auto_mode(self):
-        """Starts the auto mode timer."""
-        pygame.time.set_timer(pygame.USEREVENT, self.AUTO_START_DELAY)
-
-    def run(self):
-        """Main event loop for the application."""
-        done = False
-        while not done:
-            event = pygame.event.wait()
+    def _fade_transition(self, img_surface: pygame.Surface, fade_in: bool = True) -> None:
+        """Handles fade in/out animations."""
+        alpha_range = range(0, 255, 25) if fade_in else range(255, -1, -25)
+        
+        for alpha in alpha_range:
+            bg = pygame.Surface(self.screen.get_size()).convert()
+            bg.fill(self.BG_COLOR)
             
+            img_surface.set_alpha(alpha)
+            self.screen.blit(img_surface, (self.MENU_WIDTH, 0))
+            
+            pygame.display.flip()
+            pygame.time.delay(20)
+
+    def _update_display_image(self, img_tuple: Tuple[str, pygame.Surface, pygame.Surface]) -> None:
+        """Updates the main display area with a new image."""
+        if self.right_frame_previous:
+            self._fade_transition(self.right_frame_previous, fade_in=False)
+        
+        self.right_frame_previous = img_tuple[2] # Use the background surface
+        self._fade_transition(self.right_frame_previous, fade_in=True)
+
+    def _rotate_list(self, lst: list, direction: str = 'left') -> None:
+        """Rotates a list in place."""
+        if not lst: return
+        if direction == 'left':
+            lst.append(lst.pop(0))
+        else:
+            lst.insert(0, lst.pop())
+
+    def _start_auto_timer(self) -> None:
+        """Resets the auto-slideshow timer."""
+        pygame.time.set_timer(pygame.USEREVENT, self.AUTO_START_DELAY_MS)
+
+    def run(self) -> None:
+        """Main event loop."""
+        running = True
+        while running:
+            event = pygame.event.wait()
             reset_timer = False
 
             if event.type == pygame.QUIT:
-                done = True
+                running = False
+                
             elif event.type == pygame.USEREVENT:
-                # Auto mode: advance to the next slide
-                pygame.time.set_timer(pygame.USEREVENT, self.AUTO_FRAME_DELAY)
-                self._rotate_left(self.auto_list)
-                self._update_right_frame(self.auto_list[0])
+                # Auto slideshow tick
+                pygame.time.set_timer(pygame.USEREVENT, self.AUTO_FRAME_DELAY_MS)
+                self._rotate_list(self.auto_image_list, 'left')
+                if self.auto_image_list:
+                    self._update_display_image(self.auto_image_list[0])
+
             elif event.type == pygame.KEYDOWN:
                 if event.key in [pygame.K_ESCAPE, pygame.K_q]:
-                    done = True
+                    running = False
+                
                 elif event.key == pygame.K_p:
-                    # Pause auto mode
-                    pygame.time.set_timer(pygame.USEREVENT, 0)
+                    logging.info("Auto-mode paused.")
+                    pygame.time.set_timer(pygame.USEREVENT, 0) # Stop timer
+                
+                # Menu Navigation (Up/Down)
                 elif event.key in [pygame.K_UP, pygame.K_KP8]:
-                    self._rotate_left(self.menu)
-                    self.current_menu_item = self.menu[0]
-                    self.auto_list = self.current_menu_item["imgs"]
-                    self.update_menu()
-                    self._update_right_frame(self.auto_list[0])
+                    self.current_item_index = (self.current_item_index + 1) % len(self.menu_items)
+                    self._change_category()
                     reset_timer = True
+
                 elif event.key in [pygame.K_DOWN, pygame.K_KP2]:
-                    self._rotate_right(self.menu)
-                    self.current_menu_item = self.menu[0]
-                    self.auto_list = self.current_menu_item["imgs"]
-                    self.update_menu()
-                    self._update_right_frame(self.auto_list[0])
+                    self.current_item_index = (self.current_item_index - 1) % len(self.menu_items)
+                    self._change_category()
                     reset_timer = True
+
+                # Image Navigation (Left/Right)
                 elif event.key in [pygame.K_LEFT, pygame.K_KP4]:
-                    self._rotate_right(self.auto_list)
-                    self._update_right_frame(self.auto_list[0])
+                    self._rotate_list(self.auto_image_list, 'right')
+                    if self.auto_image_list:
+                        self._update_display_image(self.auto_image_list[0])
                     reset_timer = True
+
                 elif event.key in [pygame.K_RIGHT, pygame.K_KP6]:
-                    self._rotate_left(self.auto_list)
-                    self._update_right_frame(self.auto_list[0])
+                    self._rotate_list(self.auto_image_list, 'left')
+                    if self.auto_image_list:
+                        self._update_display_image(self.auto_image_list[0])
                     reset_timer = True
             
             if reset_timer:
-                self.start_auto_mode()
+                self._start_auto_timer()
         
         pygame.quit()
         sys.exit(0)
 
+    def _change_category(self):
+        """Helper to switch the active menu category."""
+        self.current_item = self.menu_items[self.current_item_index]
+        self.auto_image_list = self.current_item.images
+        self._draw_menu()
+        if self.auto_image_list:
+            self._update_display_image(self.auto_image_list[0])
+
 if __name__ == "__main__":
-    # You can pass the menu data directory as a command-line argument if needed
-    # parser = argparse.ArgumentParser(description="Wall Display App")
-    # parser.add_argument("--menu-dir", default="menu-data", help="Directory containing menu data and image folders.")
-    # args = parser.parse_args()
-    # app = WallDisplayApp(args.menu_dir)
+    parser = argparse.ArgumentParser(description="Python Wall Display Application")
+    parser.add_argument("--dir", default="menu-data", help="Directory containing menu.data and images")
+    args = parser.parse_args()
     
-    # Or, run with the default directory
-    app = WallDisplayApp()
+    app = WallDisplayApp(menu_data_dir=args.dir)
     app.run()
-
-
