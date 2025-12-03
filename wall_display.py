@@ -1,4 +1,3 @@
-
 """
 Wall Display: Interactive digital signage system using pygame.
 
@@ -7,7 +6,6 @@ it under the terms of the GNU General Public License as published by
 the Free Software Foundation; either version 2 of the License, or
 (at your option) any later version.
 """
-
 
 import sys
 import csv
@@ -24,19 +22,20 @@ logging.basicConfig(
 )
 
 
-
 @dataclass
 class MenuItem:
     """
     Represents a menu category and its associated images for Wall Display.
     """
+
     id: int
     directory: Path
     menu_name: str
     description: str
-    images: List[Tuple[str, pygame.Surface, pygame.Surface]] = field(default_factory=list)
+    images: List[Tuple[str, pygame.Surface, pygame.Surface]] = field(
+        default_factory=list
+    )
     menu_surface: Optional[pygame.Surface] = None
-
 
 
 class WallDisplayApp:
@@ -102,7 +101,9 @@ class WallDisplayApp:
         except pygame.error as e:
             self._fatal_error(1, f"Pygame initialization failed: {e}")
         except (IOError, ValueError, KeyError) as e:
-            self._fatal_error(1, f"Unexpected error during setup: {e.__class__.__name__}: {e}")
+            self._fatal_error(
+                1, f"Unexpected error during setup: {e.__class__.__name__}: {e}"
+            )
 
         self._clear_verbose_screen()
         self._draw_menu()
