@@ -8,7 +8,6 @@
 
 It handles smooth visual transitions, dynamic content loading, and automated slideshows, making it perfect for events, information kiosks, or digital art galleries.
 
----
 
 ## Demo
 
@@ -16,18 +15,14 @@ It handles smooth visual transitions, dynamic content loading, and automated sli
 
 > *The system is displaying the "Events" category with the sidebar menu active.*
 
----
-
 ## Features
 
 * **Smooth Aesthetics:** Implements fade-in/fade-out transitions for a premium feel.
 * **Zero-Config UI:** Automatically adapts to Fullscreen mode.
 * **Dynamic Loader:** Reads menu structures and image paths from a simple configuration file (`menu.data`), allowing content updates without touching code.
 * **Dual Mode:** * **Auto:** Cycles through images automatically (Slideshow mode).
-    * **Interactive:** Users can navigate categories and images via keyboard/keypad.
+* **Interactive:** Users can navigate categories and images via keyboard/keypad.
 * **Hardware Efficient:** Optimized for low-resource environments (RPi).
-
----
 
 ## Getting Started
 
@@ -38,29 +33,31 @@ It handles smooth visual transitions, dynamic content loading, and automated sli
 
 ### Installation
 
-1.  **Clone the repository:**
-    ```bash
+1. **Clone the repository:**
+
+```bash
     git clone [https://github.com/agslima/wall-display.git](https://github.com/agslima/wall-display.git)
     cd wall-display
-    ```
+```
 
-2.  **Install dependencies:**
-    ```bash
+2. **Install dependencies:**
+
+```bash
     pip install pygame
-    ```
+```
 
-3.  **Run the application:**
-    ```bash
+3. **Run the application:**
+
+```bash
     python wall_display.py
-    ```
-
----
+```
 
 ## Configuration
 
 The application expects a directory (default: `menu-data/`) containing a `menu.data` file.
 
 **File Structure:**
+
 ```text
 /root
   ├── wall_display.py
@@ -68,6 +65,8 @@ The application expects a directory (default: `menu-data/`) containing a `menu.d
       ├── menu.data
       ├── events/      (contains .jpg files)
       └── notices/     (contains .jpg files)
+```
+
 ---
 
 ## Controls
@@ -83,15 +82,11 @@ The application is designed to be controlled via a standard keyboard or a mapped
 | **P** | Pause/Resume Auto-Slideshow |
 | **ESC / Q** | Quit Application |
 
----
-
 ## Tech Stack
 
 * **Language:** Python 3
 * **Graphics Engine:** Pygame - Handles rendering and window management.
 * **Data Handling:** Native CSV and Pathlib libraries.
-
----
 
 ## License
 
