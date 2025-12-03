@@ -131,7 +131,7 @@ class WallDisplayApp:
 
     def _fatal_error(self, status: int, msg: str) -> None:
         """Logs a fatal error and exits the application."""
-        logging.critical(msg)
+        logging.critical("Fatal error: %s", msg)
         pygame.quit()
         sys.exit(status)
 
@@ -244,7 +244,7 @@ class WallDisplayApp:
                 background.blit(img, (0, 0))
                 img_list.append((file_path.name, img, background))
             except pygame.error:
-                logging.warning(f"Skipping invalid image: {file_path.name}")
+                logging.warning("Skipping invalid image: %s", file_path.name)
 
         return img_list
 
