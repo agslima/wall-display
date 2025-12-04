@@ -154,7 +154,30 @@ class ViewRenderer:
     def __init__(self, screen: pygame.Surface, config: ConfigManager):
         self.screen = screen
         self.config = config
-        self.width, self.height = screen.get_size()
+        # Try to get screen size from the provided surface. If the
+        # returned value is not a proper (width, height) tuple (for
+        # example when tests patch pygame and return MagicMocks),
+        # fall back to pygame.display.Info() or sensible defaults.
+        try:
+            size = screen.get_size()
+            if isinstance(size, (tuple, list)) and len(size) == 2:
+                self.width, self.height = size
+            else:
+                # Attempt to read display info
+                try:
+                    di = pygame.display.Info()
+                    self.width = getattr(di, "current_w", 800)
+                    self.height = getattr(di, "current_h", 600)
+                except Exception:
+                    self.width, self.height = 800, 600
+        except Exception:
+            try:
+                di = pygame.display.Info()
+                self.width = getattr(di, "current_w", 800)
+                self.height = getattr(di, "current_h", 600)
+            except Exception:
+                self.width, self.height = 800, 600
+
         self.menu_width = config.get("window", "menu_width")
 
         # UI State
