@@ -1,16 +1,15 @@
 """
 Wall Display: Interactive digital signage system using pygame.
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation; either version 2 of the License, or
-(at your option) any later version.
+Architecture: MVC + SRP + Multithreading (Non-blocking I/O).
 """
 
 import sys
 import csv
+import json
 import logging
 import argparse
+import threading
+import math
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import List, Tuple, Dict, Optional, Any
@@ -24,352 +23,423 @@ logging.basicConfig(
 
 @dataclass
 class MenuItem:
-    """
-    Represents a menu category and its associated images for Wall Display.
-    """
+    """Model representing a menu category."""
 
-    menu_id: int  # CORREÇÃO: mudado de 'id' para 'menu_id'
+    menu_id: int
     directory: Path
     menu_name: str
     description: str
-    images: List[Tuple[str, pygame.Surface, pygame.Surface]] = field(
-        default_factory=list
-    )
-    menu_surface: Optional[pygame.Surface] = None
+    image_paths: List[Path] = field(default_factory=list)
+    # Note: We no longer store loaded_images here directly to avoid threading conflicts.
+    # Images are managed by the Controller's runtime state.
 
 
-class WallDisplayApp:
-    """
-    Main application class for the Wall Display program.
-    Handles UI rendering, data loading, and event processing logic.
-    """
+class ConfigManager:
+    """Responsibility: Load, validate and provide configuration settings."""
 
-    # Constants
-    MENU_WIDTH = 205
-    AUTO_FRAME_DELAY_MS = 15000  # 15 seconds
-    AUTO_START_DELAY_MS = 20000  # 20 seconds
-    FONT_COLOR_ACTIVE = (255, 255, 255)
-    FONT_COLOR_INACTIVE = (150, 150, 150)
-    BG_COLOR = (0, 0, 0)
+    DEFAULT_CONFIG = {
+        "window": {"fullscreen": True, "menu_width": 205, "fps": 30},
+        "slideshow": {
+            "image_delay_ms": 15000,
+            "start_delay_ms": 20000,
+            "fade_speed_ms": 20,
+        },
+        "colors": {
+            "background": [0, 0, 0],
+            "font_active": [255, 255, 255],
+            "font_inactive": [100, 100, 100],
+            "loading_text": [255, 255, 0],
+            "spinner": [0, 200, 255],
+        },
+    }
 
-    def __init__(self, menu_data_dir: str = "menu-data"):
-        """
-        Initializes the application, Pygame, and display settings.
+    def __init__(self, config_path: str):
+        self.data = self._load_config(config_path)
 
-        Args:
-            menu_data_dir (str): Path to the directory containing menu.data and images.
-        """
-        pygame.init()
-        pygame.mouse.set_visible(False)
-
-        # UI Layout
-        self.disp_info = pygame.display.Info()
-        self.disp_w = self.disp_info.current_w
-        self.disp_h = self.disp_info.current_h
-        self.menu_height = self.disp_h
-
-        # State
-        self.screen: Optional[pygame.Surface] = None
-        self.menu_data_path = Path(menu_data_dir)
-        self.verbose_line_y = 0
-        self.menu_items: List[MenuItem] = []
-        self.current_item_index = 0
-        self.auto_image_list: List[Tuple[str, pygame.Surface, pygame.Surface]] = []
-        self.right_frame_previous: Optional[pygame.Surface] = None
-
-        self.current_item = None  # Ensure attribute is always defined in __init__
-        self._setup_display()
-
-    def _setup_display(self) -> None:
-        """Sets up the display surface and loads initial data."""
-        try:
-            self.screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
-            self._verbose_msg(f"Initializing display: ({self.disp_w}x{self.disp_h})")
-
-            self.menu_items = self._load_menu()
-            if not self.menu_items:
-                logging.error("No menu items loaded.")
-                sys.exit(0)
-
-            # Initialize state with first item
-            self.current_item = self.menu_items[0]
-            self.auto_image_list = self.current_item.images
-
-            if self.auto_image_list:
-                self.right_frame_previous = self.auto_image_list[0][2]
-
-        except pygame.error as error:  # CORREÇÃO: mudado de 'e' para 'error'
-            self._fatal_error(1, f"Pygame initialization failed: {error}")
-        except (
-            IOError,
-            ValueError,
-            KeyError,
-        ) as error:  # CORREÇÃO: mudado de 'e' para 'error'
-            self._fatal_error(
-                1, f"Unexpected error during setup: {error.__class__.__name__}: {error}"
-            )
-
-        self._clear_verbose_screen()
-        self._draw_menu()
-        self._start_auto_timer()
-
-    def _verbose_msg(self, msg: str) -> None:
-        """Renders a status message directly to the screen during loading."""
-        logging.info(msg)
-        if not self.screen:
-            return
-
-        font = pygame.font.Font(None, 32)
-        font_height = font.get_height()
-        surface = font.render(msg, True, (50, 50, 50))
-
-        self.screen.blit(surface, (10, self.verbose_line_y))
-        self.verbose_line_y += font_height
-        pygame.display.flip()
-
-    def _clear_verbose_screen(self) -> None:
-        """Clears the loading/verbose text."""
-        self.verbose_line_y = 0
-        background = pygame.Surface(self.screen.get_size()).convert()
-        background.fill(self.BG_COLOR)
-        self.screen.blit(background, (0, 0))
-
-    def _fatal_error(self, status: int, msg: str) -> None:
-        """Logs a fatal error and exits the application."""
-        logging.critical("Fatal Error: %s", msg)
-        pygame.quit()
-        sys.exit(status)
-
-    def _draw_menu(self) -> None:
-        """Draws the current menu sidebar."""
-        current = self.menu_items[self.current_item_index]
-        if current.menu_surface:
-            self.screen.blit(current.menu_surface, (0, 0))
-            pygame.display.flip()
-
-    def _load_menu_data_file(self) -> List[Dict[str, Any]]:
-        """Parses the menu.data CSV file."""
-        file_path = self.menu_data_path / "menu.data"
-        entries = []
-
-        if not file_path.exists():
-            self._fatal_error(1, f"Menu data file not found: {file_path}")
+    def _load_config(self, path: str) -> Dict[str, Any]:
+        path_obj = Path(path)
+        if not path_obj.exists():
+            logging.warning("Config file %s not found. Using defaults.", path)
+            return self.DEFAULT_CONFIG.copy()
 
         try:
-            with file_path.open(
-                "r", encoding="utf-8"
-            ) as menu_file:  # CORREÇÃO: 'f' para 'menu_file'
-                reader = csv.reader(menu_file, delimiter=":")
+            with path_obj.open("r", encoding="utf-8") as file_handle:
+                user_config = json.load(file_handle)
+                final_config = self.DEFAULT_CONFIG.copy()
+                final_config.update(user_config)
+                return final_config
+        except json.JSONDecodeError as error:
+            logging.error("Config error: %s. Using defaults.", error)
+            return self.DEFAULT_CONFIG.copy()
+
+    def get(self, section: str, key: str) -> Any:
+        """Safe getter for config values."""
+        return self.data.get(section, {}).get(key)
+
+
+class AssetManager:
+    """Responsibility: Handle File I/O and Image Processing."""
+
+    def __init__(self, menu_data_dir: Path):
+        self.root_dir = menu_data_dir
+
+    def load_menu_structure(self) -> List[MenuItem]:
+        """Scans CSV and directories to build the Menu Model (Metadata only)."""
+        csv_path = self.root_dir / "menu.data"
+        if not csv_path.exists():
+            logging.error("Menu data file not found: %s", csv_path)
+            return []
+
+        items = []
+        try:
+            with csv_path.open("r", encoding="utf-8") as file_handle:
+                reader = csv.reader(file_handle, delimiter=":")
                 for row in reader:
-                    # Format: ID:DIR:ENABLED:NAME:DESC
                     if len(row) > 3 and int(row[2]) == 1:
-                        entries.append(
-                            {
-                                "id": int(row[0].strip()),
-                                "dir": row[1].strip(),
-                                "name": row[3].strip(),
-                                "desc": row[4].strip() if len(row) > 4 else "",
-                            }
+                        img_dir = self.root_dir / row[1].strip()
+                        paths = self._scan_images(img_dir)
+
+                        items.append(
+                            MenuItem(
+                                menu_id=int(row[0].strip()),
+                                directory=img_dir,
+                                menu_name=row[3].strip(),
+                                description=row[4].strip() if len(row) > 4 else "",
+                                image_paths=paths,
+                            )
                         )
-        except IOError as error:  # CORREÇÃO: 'e' para 'error'
-            self._fatal_error(1, f"Could not read menu file: {error}")
+        except (IOError, ValueError) as error:
+            logging.error("Error reading menu data: %s", error)
 
-        return entries
+        return items
 
-    def _load_menu(self) -> List[MenuItem]:
-        """Loads images and generates surfaces for all menu items."""
-        self._verbose_msg("Loading menu configuration...")
-        raw_data = self._load_menu_data_file()
-
-        loaded_items = []
-
-        for entry in raw_data:
-            self._verbose_msg(f"Processing category: {entry['name']}")
-
-            # Resolve image directory relative to menu_data_path
-            img_dir = self.menu_data_path / entry["dir"]
-            images = self._load_images_from_dir(img_dir)
-
-            menu_item = MenuItem(
-                menu_id=entry["id"],  # CORREÇÃO: 'id' para 'menu_id'
-                directory=img_dir,
-                menu_name=entry["name"],
-                description=entry["desc"],
-                images=images,
-            )
-
-            # Pre-render the menu sidebar for this state
-            menu_item.menu_surface = self._generate_menu_surface(entry["id"], raw_data)
-            loaded_items.append(menu_item)
-
-        self._verbose_msg("Loading complete.")
-        return loaded_items
-
-    def _generate_menu_surface(
-        self, active_id: int, all_entries: List[Dict]
-    ) -> pygame.Surface:
-        """Generates the static sidebar surface for a specific active state."""
-        surface = pygame.Surface((self.MENU_WIDTH, self.menu_height)).convert()
-        surface.fill(self.BG_COLOR)
-
-        font = pygame.font.SysFont("gillsansmt", 20, bold=False)
-        font_height = font.get_height()
-
-        y_pos = 40
-        left_margin = 10
-        vertical_padding = 40
-
-        for entry in all_entries:
-            color = (
-                self.FONT_COLOR_ACTIVE
-                if entry["id"] == active_id
-                else self.FONT_COLOR_INACTIVE
-            )
-            text_surf = font.render(entry["name"], True, color)
-            surface.blit(text_surf, (left_margin, y_pos))
-            y_pos += font_height + vertical_padding
-
-        return surface
-
-    def _load_images_from_dir(
-        self, directory: Path
-    ) -> List[Tuple[str, pygame.Surface, pygame.Surface]]:
-        """Loads valid JPG images from a directory."""
-        img_list = []
+    def _scan_images(self, directory: Path) -> List[Path]:
         if not directory.exists():
-            logging.warning("Directory not found: %s", directory)
-            return img_list
-
-        files = sorted(
+            return []
+        return sorted(
             [f for f in directory.iterdir() if f.suffix.lower() in (".jpg", ".jpeg")]
         )
 
-        for file_path in files:
+    def load_images_threaded(
+        self, paths: List[Path]
+    ) -> List[Tuple[str, pygame.Surface, pygame.Surface]]:
+        """
+        Loads images from disk. Designed to run in a worker thread.
+        Returns a list of loaded resources.
+        """
+        loaded_buffer = []
+        for path in paths:
             try:
-                img = pygame.image.load(str(file_path)).convert()
-                background = pygame.Surface(img.get_size()).convert()
-                background.blit(img, (0, 0))
-                img_list.append((file_path.name, img, background))
-            except pygame.error:
-                logging.warning("Skipping invalid image: %s", file_path.name)
+                # Load image
+                img = pygame.image.load(str(path))
 
-        return img_list
+                # Note: .convert() is tricky in threads.
+                # Ideally, we call .convert() on the main thread,
+                # but standard Pygame often allows it if display is initialized.
+                img = img.convert()
 
-    def _fade_transition(
-        self, img_surface: pygame.Surface, fade_in: bool = True
+                bg_surface = pygame.Surface(img.get_size()).convert()
+                bg_surface.blit(img, (0, 0))
+
+                loaded_buffer.append((path.name, img, bg_surface))
+            except (pygame.error, OSError):
+                logging.warning("Invalid image skipped: %s", path.name)
+
+        return loaded_buffer
+
+
+class ViewRenderer:
+    """Responsibility: Draw everything on screen (UI, Images, Transitions, Spinner)."""
+
+    def __init__(self, screen: pygame.Surface, config: ConfigManager):
+        self.screen = screen
+        self.config = config
+        self.width, self.height = screen.get_size()
+        self.menu_width = config.get("window", "menu_width")
+
+        # UI State
+        self.scroll_y = 0
+        self.font = pygame.font.SysFont("gillsansmt", 22, bold=False)
+        self.item_height = 50
+        self.spinner_angle = 0
+
+    def draw_menu_sidebar(self, items: List[MenuItem], active_index: int) -> None:
+        """Draws the sidebar menu with scrolling logic."""
+        colors = self.config.data["colors"]
+
+        # Background
+        sidebar_rect = pygame.Rect(0, 0, self.menu_width, self.height)
+        pygame.draw.rect(self.screen, colors["background"], sidebar_rect)
+
+        # Scroll Logic
+        center_screen_y = self.height // 2
+        active_item_y = active_index * self.item_height
+        target = center_screen_y - active_item_y
+        self.scroll_y += (target - self.scroll_y) * 0.1  # Smooth lerp
+
+        # Draw Items
+        left_margin = 20
+        for i, item in enumerate(items):
+            y_pos = int(self.scroll_y + (i * self.item_height))
+
+            # Culling
+            if y_pos < -self.item_height or y_pos > self.height:
+                continue
+
+            color = (
+                colors["font_active"] if i == active_index else colors["font_inactive"]
+            )
+            text_surf = self.font.render(item.menu_name, True, color)
+            self.screen.blit(text_surf, (left_margin, y_pos))
+
+    def draw_spinner(self) -> None:
+        """Draws a rotating loading circle."""
+        colors = self.config.data["colors"]
+        center_x = self.menu_width + (self.width - self.menu_width) // 2
+        center_y = self.height // 2
+        radius = 40
+        thickness = 5
+
+        self.spinner_angle = (self.spinner_angle + 10) % 360
+
+        # Draw arc
+        rect = pygame.Rect(center_x - radius, center_y - radius, radius * 2, radius * 2)
+        start_angle = math.radians(self.spinner_angle)
+        end_angle = math.radians(self.spinner_angle + 270)
+
+        pygame.draw.arc(
+            self.screen,
+            colors.get("spinner", (0, 200, 255)),
+            rect,
+            start_angle,
+            end_angle,
+            thickness,
+        )
+
+        # Loading Text
+        font = pygame.font.Font(None, 30)
+        text = font.render("Loading...", True, colors["font_active"])
+        text_rect = text.get_rect(center=(center_x, center_y + radius + 30))
+        self.screen.blit(text, text_rect)
+
+    def fade_image_transition(
+        self, old_surface: Optional[pygame.Surface], new_surface: pygame.Surface
     ) -> None:
-        """Handles fade in/out animations."""
-        alpha_range = range(0, 255, 25) if fade_in else range(255, -1, -25)
+        """Handles cross-fade transition between images."""
+        speed = self.config.get("slideshow", "fade_speed_ms")
+        colors = self.config.data["colors"]
+        display_area = pygame.Rect(
+            self.menu_width, 0, self.width - self.menu_width, self.height
+        )
 
-        for alpha in alpha_range:
-            background = pygame.Surface(
-                self.screen.get_size()
-            ).convert()  # CORREÇÃO: 'bg' para 'background'
-            background.fill(self.BG_COLOR)
+        for alpha in range(0, 256, 40):  # Faster steps
+            pygame.draw.rect(self.screen, colors["background"], display_area)
 
-            img_surface.set_alpha(alpha)
-            self.screen.blit(img_surface, (self.MENU_WIDTH, 0))
+            if old_surface:
+                old_surface.set_alpha(255 - alpha)
+                self.screen.blit(old_surface, (self.menu_width, 0))
 
-            pygame.display.flip()
-            pygame.time.delay(20)
+            new_surface.set_alpha(alpha)
+            self.screen.blit(new_surface, (self.menu_width, 0))
 
-    def _update_display_image(
-        self, img_tuple: Tuple[str, pygame.Surface, pygame.Surface]
-    ) -> None:
-        """Updates the main display area with a new image."""
-        if self.right_frame_previous:
-            self._fade_transition(self.right_frame_previous, fade_in=False)
+            pygame.display.update(display_area)
+            pygame.time.delay(speed)
 
-        self.right_frame_previous = img_tuple[2]  # Use the background surface
-        self._fade_transition(self.right_frame_previous, fade_in=True)
 
-    def _rotate_list(self, lst: list, direction: str = "left") -> None:
-        """Rotates a list in place."""
-        if not lst:
+class WallDisplayApp:
+    """Controller: Handles Main Loop, Input, and Thread Management."""
+
+    def __init__(self, menu_dir: str, config_path: str):
+        self.config_mgr = ConfigManager(config_path)
+        self.asset_mgr = AssetManager(Path(menu_dir))
+
+        pygame.init()
+        pygame.mouse.set_visible(False)
+
+        flags = pygame.FULLSCREEN if self.config_mgr.get("window", "fullscreen") else 0
+        screen = pygame.display.set_mode((0, 0), flags)
+
+        self.renderer = ViewRenderer(screen, self.config_mgr)
+        self.clock = pygame.time.Clock()
+        self.fps = self.config_mgr.get("window", "fps") or 30
+
+        # Data State
+        self.menu_items: List[MenuItem] = []
+        self.current_index = 0
+        self.current_img_list: list = []
+        self.current_img_bg: Optional[pygame.Surface] = None
+
+        # Threading State
+        self.is_loading = False
+        self.load_request_id = 0  # To handle rapid key presses (race conditions)
+        self.loaded_result_queue: List = []  # Shared variable to pass data from thread
+
+        self._initialize_content()
+
+    def _initialize_content(self):
+        """Loads initial menu structure and first category."""
+        self.menu_items = self.asset_mgr.load_menu_structure()
+        if not self.menu_items:
+            sys.exit("No menu data found")
+
+        # Initial load (blocking is fine for startup)
+        self.current_img_list = self.asset_mgr.load_images_threaded(
+            self.menu_items[0].image_paths
+        )
+        if self.current_img_list:
+            self.current_img_bg = self.current_img_list[0][2]
+
+        self._reset_slideshow_timer(is_start=True)
+
+    def _trigger_category_load(self, new_index: int):
+        """Initiates the background thread loading."""
+        self.current_index = new_index
+        self.is_loading = True
+        self.loaded_result_queue = []  # Clear previous results
+
+        # Increment ID. If thread finishes and ID doesn't match, we discard result.
+        self.load_request_id += 1
+        current_req_id = self.load_request_id
+
+        item = self.menu_items[self.current_index]
+
+        # Worker Function
+        def worker(req_id, paths):
+            logging.info("Thread started for: %s", item.menu_name)
+            results = self.asset_mgr.load_images_threaded(paths)
+
+            # Post results safely
+            if req_id == self.load_request_id:
+                self.loaded_result_queue.append(results)
+
+        # Start Thread
+        t = threading.Thread(target=worker, args=(current_req_id, item.image_paths))
+        t.daemon = True
+        t.start()
+
+    def _check_loading_complete(self):
+        """Called every frame to check if thread finished."""
+        if self.loaded_result_queue:
+            # Thread finished!
+            new_images = self.loaded_result_queue.pop(0)
+            self.current_img_list = new_images
+            self.is_loading = False
+
+            # Show first image
+            if self.current_img_list:
+                new_bg = self.current_img_list[0][2]
+                self.renderer.fade_image_transition(self.current_img_bg, new_bg)
+                self.current_img_bg = new_bg
+
+            self._reset_slideshow_timer(is_start=True)
+
+    def _rotate_images(self, direction="left"):
+        """Rotates the image list and updates the display."""
+        if not self.current_img_list or self.is_loading:
             return
+
         if direction == "left":
-            lst.append(lst.pop(0))
+            self.current_img_list.append(self.current_img_list.pop(0))
         else:
-            lst.insert(0, lst.pop())
+            self.current_img_list.insert(0, self.current_img_list.pop())
 
-    def _start_auto_timer(self) -> None:
-        """Resets the auto-slideshow timer."""
-        pygame.time.set_timer(pygame.USEREVENT, self.AUTO_START_DELAY_MS)
+        new_bg = self.current_img_list[0][2]
+        self.renderer.fade_image_transition(self.current_img_bg, new_bg)
+        self.current_img_bg = new_bg
 
-    def run(self) -> None:
-        """Main event loop."""
+    def _reset_slideshow_timer(self, is_start=False):
+        """Resets the timer for the next slide."""
+        section = "slideshow"
+        delay = self.config_mgr.get(
+            section, "start_delay_ms" if is_start else "image_delay_ms"
+        )
+        pygame.time.set_timer(pygame.USEREVENT, delay)
+
+    def run(self):
+        """Main Loop."""
         running = True
+        slide_delay = self.config_mgr.get("slideshow", "image_delay_ms")
+        colors = self.config_mgr.data["colors"]
+
         while running:
-            event = pygame.event.wait()
-            reset_timer = False
+            # CRITICAL CHANGE: We use tick() instead of wait() to allow animation
+            self.clock.tick(self.fps)
 
-            if event.type == pygame.QUIT:
-                running = False
-
-            elif event.type == pygame.USEREVENT:
-                # Auto slideshow tick
-                pygame.time.set_timer(pygame.USEREVENT, self.AUTO_FRAME_DELAY_MS)
-                self._rotate_list(self.auto_image_list, "left")
-                if self.auto_image_list:
-                    self._update_display_image(self.auto_image_list[0])
-
-            elif event.type == pygame.KEYDOWN:
-                if event.key in [pygame.K_ESCAPE, pygame.K_q]:
+            # 1. Event Handling
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
                     running = False
 
-                elif event.key == pygame.K_p:
-                    logging.info("Auto-mode paused.")
-                    pygame.time.set_timer(pygame.USEREVENT, 0)  # Stop timer
+                elif event.type == pygame.USEREVENT:
+                    if not self.is_loading:
+                        pygame.time.set_timer(pygame.USEREVENT, slide_delay)
+                        self._rotate_images("left")
 
-                # Menu Navigation (Up/Down)
-                elif event.key in [pygame.K_UP, pygame.K_KP8]:
-                    self.current_item_index = (self.current_item_index + 1) % len(
-                        self.menu_items
-                    )
-                    self._change_category()
-                    reset_timer = True
+                elif event.type == pygame.KEYDOWN:
+                    if event.key in [pygame.K_ESCAPE, pygame.K_q]:
+                        running = False
 
-                elif event.key in [pygame.K_DOWN, pygame.K_KP2]:
-                    self.current_item_index = (self.current_item_index - 1) % len(
-                        self.menu_items
-                    )
-                    self._change_category()
-                    reset_timer = True
+                    elif event.key == pygame.K_p:
+                        pygame.time.set_timer(pygame.USEREVENT, 0)
 
-                # Image Navigation (Left/Right)
-                elif event.key in [pygame.K_LEFT, pygame.K_KP4]:
-                    self._rotate_list(self.auto_image_list, "right")
-                    if self.auto_image_list:
-                        self._update_display_image(self.auto_image_list[0])
-                    reset_timer = True
+                    # Navigation
+                    elif event.key in [pygame.K_UP, pygame.K_KP8]:
+                        new_idx = (self.current_index + 1) % len(self.menu_items)
+                        self._trigger_category_load(new_idx)
 
-                elif event.key in [pygame.K_RIGHT, pygame.K_KP6]:
-                    self._rotate_list(self.auto_image_list, "left")
-                    if self.auto_image_list:
-                        self._update_display_image(self.auto_image_list[0])
-                    reset_timer = True
+                    elif event.key in [pygame.K_DOWN, pygame.K_KP2]:
+                        new_idx = (self.current_index - 1) % len(self.menu_items)
+                        self._trigger_category_load(new_idx)
 
-            if reset_timer:
-                self._start_auto_timer()
+                    elif event.key in [pygame.K_LEFT, pygame.K_KP4]:
+                        self._rotate_images("right")
+                        self._reset_slideshow_timer(is_start=True)
+
+                    elif event.key in [pygame.K_RIGHT, pygame.K_KP6]:
+                        self._rotate_images("left")
+                        self._reset_slideshow_timer(is_start=True)
+
+            # 2. Logic Update
+            if self.is_loading:
+                self._check_loading_complete()
+
+            # 3. Drawing
+            # Draw Sidebar
+            self.renderer.draw_menu_sidebar(self.menu_items, self.current_index)
+
+            # Draw Main Content
+            if self.is_loading:
+                # Clear content area
+                bg_rect = pygame.Rect(
+                    self.renderer.menu_width,
+                    0,
+                    self.renderer.width,
+                    self.renderer.height,
+                )
+                pygame.draw.rect(self.renderer.screen, colors["background"], bg_rect)
+                self.renderer.draw_spinner()
+            else:
+                # Keep drawing current image if not loading
+                if self.current_img_bg:
+                    self.renderer.draw_static_image(self.current_img_bg)
+
+            pygame.display.flip()
 
         pygame.quit()
         sys.exit(0)
 
-    def _change_category(self):
-        """Helper to switch the active menu category."""
-        self.current_item = self.menu_items[self.current_item_index]
-        self.auto_image_list = self.current_item.images
-        self._draw_menu()
-        if self.auto_image_list:
-            self._update_display_image(self.auto_image_list[0])
-
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Python Wall Display Application")
-    parser.add_argument(
-        "--dir", default="menu-data", help="Directory containing menu.data and images"
-    )
+    parser = argparse.ArgumentParser(description="Wall Display Pro - Multithreaded")
+    parser.add_argument("--dir", default="menu-data", help="Data directory")
+    parser.add_argument("--config", default="config.json", help="Config file")
     args = parser.parse_args()
 
-    app = WallDisplayApp(menu_data_dir=args.dir)
-    app.run()
+    try:
+        app_instance = WallDisplayApp(args.dir, args.config)
+        app_instance.run()
+    # pylint: disable=broad-exception-caught
+    except Exception as error:
+        logging.critical("Application crashed: %s", error)
+        pygame.quit()
+        sys.exit(1)

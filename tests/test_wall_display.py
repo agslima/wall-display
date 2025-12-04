@@ -1,151 +1,208 @@
+# pylint: disable=redefined-outer-name, protected-access
 """
 Unit tests for the Wall Display application.
-
-Tests cover:
-- List rotation logic
-- Application initialization
-- Image loading and filtering
-- Menu navigation logic
+Tests configuration loading, asset parsing, and multithreading logic.
 """
 
+import sys
+import json
+from unittest.mock import MagicMock, patch, mock_open
 from pathlib import Path
-from unittest.mock import patch, mock_open
-
 import pytest
 
-from wall_display import WallDisplayApp
+# Add the parent directory to sys.path to import the main module
+sys.path.append(".")
 
-# --- Global Fixtures and Mocks ---
+# pylint: disable=wrong-import-position
+from wall_display import ConfigManager, AssetManager, WallDisplayApp, MenuItem
 
-
-@pytest.fixture
-def mock_pygame_fixture():
-    """
-    Complete pygame mock to avoid video/audio driver errors
-    during tests in CI/CD or headless environments.
-    """
-    with patch("wall_display.pygame") as mock_pg:
-        # Configure common mocks that __init__ calls
-        mock_pg.display.Info.return_value.current_w = 1920
-        mock_pg.display.Info.return_value.current_h = 1080
-        mock_pg.font.SysFont.return_value.get_height.return_value = 20
-        mock_pg.font.Font.return_value.get_height.return_value = 20
-        yield mock_pg
+# --- Global Fixtures ---
 
 
 @pytest.fixture
-def sample_menu_data():
-    """Simulates the contents of the menu.data file"""
-    return "1:images_dir:1:Nature:Landscape photos\n2:city_dir:1:City:Urban photos"
+def mock_pygame(mocker):
+    """Mocks Pygame to allow testing in headless environments (CI/CD)."""
+    mock = mocker.patch("wall_display.pygame")
+    # Mock display info
+    mock.display.Info.return_value.current_w = 1920
+    mock.display.Info.return_value.current_h = 1080
+    # Mock font rendering
+    mock.font.SysFont.return_value.render.return_value = MagicMock()
+    mock.font.SysFont.return_value.get_height.return_value = 20
+    return mock
 
 
-# --- Pure Logic Tests ---
+@pytest.fixture
+def sample_config_json():
+    """Provides a valid JSON configuration sample for testing."""
+    return json.dumps(
+        {
+            "window": {"fullscreen": False, "menu_width": 200, "fps": 60},
+            "colors": {"background": [10, 10, 10]},
+        }
+    )
 
 
-def test_rotate_list_left():
-    """Tests the logic of rotating a list to the left."""
-    # Test list rotation logic directly
-    lista = [1, 2, 3]
-    lista.append(lista.pop(0))  # Rotate left
-    assert lista == [2, 3, 1]
+@pytest.fixture
+def sample_csv_data():
+    """Provides a sample menu.data CSV content."""
+    # ID:DIR:ENABLED:NAME:DESC
+    return "1:nature:1:Nature:Beautiful trees\n2:city:0:City:Ignored item"
 
 
-def test_rotate_list_right():
-    """Tests the logic of rotating a list to the right."""
-    # Test list rotation logic directly
-    lista = [1, 2, 3]
-    lista.insert(0, lista.pop())  # Rotate right
-    assert lista == [3, 1, 2]
+# --- Tests: ConfigManager ---
 
 
-# --- Integration Tests with Mocks (IO and Pygame) ---
+def test_config_load_valid(tmp_path, sample_config_json):
+    """Ensure it loads valid JSON values correctly."""
+    config_file = tmp_path / "config.json"
+    config_file.write_text(sample_config_json)
+
+    manager = ConfigManager(str(config_file))
+
+    assert manager.get("window", "fps") == 60
+    assert manager.get("window", "fullscreen") is False
 
 
-@pytest.mark.usefixtures("mock_pygame_fixture")
-def test_app_initialization_success(menu_data):
-    """
-    Verifies that the app initializes correctly:
-    1. Reads the data file.
-    2. Creates MenuItem objects.
-    3. Configures the screen.
-    """
+def test_config_load_missing_file_defaults():
+    """Ensure it falls back to DEFAULT_CONFIG if file doesn't exist."""
+    manager = ConfigManager("non_existent.json")
+
+    # Check a default value known to exist in the class
+    assert manager.get("window", "menu_width") == 205
+    assert manager.get("slideshow", "image_delay_ms") == 15000
+
+
+def test_config_load_corrupt_json(tmp_path):
+    """Ensure it handles broken JSON gracefully."""
+    bad_file = tmp_path / "bad.json"
+    bad_file.write_text("{broken_json: ]")
+
+    manager = ConfigManager(str(bad_file))
+    # Should load defaults instead of crashing
+    assert manager.get("window", "menu_width") == 205
+
+
+# --- Tests: AssetManager ---
+
+
+def test_asset_manager_csv_parsing(sample_csv_data):
+    """Test if AssetManager correctly parses CSV and ignores disabled items."""
+
+    # Mock file system interactions
     with patch("pathlib.Path.exists", return_value=True), patch(
-        "pathlib.Path.open", mock_open(read_data=menu_data)
-    ), patch("pathlib.Path.iterdir", return_value=[Path("img1.jpg")]), patch(
-        "wall_display.WallDisplayApp._generate_menu_surface"
-    ):
+        "pathlib.Path.open", mock_open(read_data=sample_csv_data)
+    ), patch("wall_display.AssetManager._scan_images", return_value=[Path("img1.jpg")]):
 
-        app = WallDisplayApp(menu_data_dir="menu-data")
+        manager = AssetManager(Path("dummy_dir"))
+        items = manager.load_menu_structure()
+
+        # Should only have 1 item (ID 1), because ID 2 has '0' in enabled column
+        assert len(items) == 1
+        assert items[0].menu_name == "Nature"
+        assert items[0].menu_id == 1
+        assert items[0].image_paths == [Path("img1.jpg")]
+
+
+def test_asset_manager_load_images_threaded(mock_pygame):
+    """Test the worker method that loads images."""
+    manager = AssetManager(Path("."))
+
+    # Create fake image paths
+    paths = [Path("test1.jpg"), Path("test2.jpg")]
+
+    # Mock pygame.image.load to avoid disk error
+    mock_surf = MagicMock()
+    mock_pygame.image.load.return_value = mock_surf
+    # Mock convert (essential as it might fail without video mode)
+    mock_surf.convert.return_value = mock_surf
+
+    results = manager.load_images_threaded(paths)
+
+    assert len(results) == 2
+    assert results[0][0] == "test1.jpg"  # Check filename
+    assert mock_pygame.image.load.call_count == 2
+
+
+# --- Tests: WallDisplayApp (Controller & Threading) ---
+
+
+def test_app_initialization(mock_pygame):
+    """Test if the app initializes state correctly."""
+
+    # We need to mock AssetManager to return at least one item
+    mock_item = MenuItem(1, Path("."), "Test", "Desc", [])
+
+    with patch(
+        "wall_display.AssetManager.load_menu_structure", return_value=[mock_item]
+    ), patch("wall_display.AssetManager.load_images_threaded", return_value=[]):
+
+        app = WallDisplayApp("dummy_dir", "dummy_config.json")
+
+        assert app.fps == 30  # Default from ConfigManager
+        assert len(app.menu_items) == 1
+        assert app.current_index == 0
+        # Verify pygame init was called (using the fixture)
+        assert mock_pygame.init.called
+
+
+def test_trigger_category_load_spawns_thread():
+    """
+    CRITICAL: Verify that switching categories spawns a thread
+    and updates the Request ID (Race Condition Protection).
+    """
+    mock_item = MenuItem(1, Path("."), "Test", "Desc", [])
+
+    with patch(
+        "wall_display.AssetManager.load_menu_structure", return_value=[mock_item]
+    ), patch("wall_display.AssetManager.load_images_threaded", return_value=[]), patch(
+        "wall_display.pygame"
+    ), patch(
+        "threading.Thread"
+    ) as mock_thread_class:
+
+        app = WallDisplayApp("dummy_dir", "dummy_config.json")
+
+        # Initial state
+        initial_id = app.load_request_id
+        assert app.is_loading is False
+
+        # Trigger the switch
+        app._trigger_category_load(0)
 
         # Assertions
-        assert app.disp_w == 1920
-        assert len(app.menu_items) == 2
-        assert app.menu_items[0].menu_name == "Nature"
-        assert app.current_item_index == 0
+        assert app.is_loading is True
+        assert app.load_request_id == initial_id + 1
 
-        # Checks if images were loaded (iterdir mocked)
-        # Since iterdir returned 1 file, images should have size 1
-        assert len(app.menu_items[0].images) == 1
-
-
-def test_app_initialization_no_menu_file():
-    """Tests if the app exits (sys.exit) when the menu file does not exist."""
-    with patch("pathlib.Path.exists", return_value=False):
-        # We expect the app to call sys.exit(1)
-        with pytest.raises(SystemExit) as pytest_wrapped_e:
-            WallDisplayApp()
-
-        assert pytest_wrapped_e.type == SystemExit
-        assert pytest_wrapped_e.value.code == 1
+        # Verify a thread was created and started
+        assert mock_thread_class.called
+        mock_thread_instance = mock_thread_class.return_value
+        assert mock_thread_instance.start.called
+        assert mock_thread_instance.daemon is True
 
 
-def test_load_images_ignores_non_jpg():
-    """Tests if the image loader ignores files that are not JPG."""
-    with patch("wall_display.pygame"):
-        app = WallDisplayApp.__new__(WallDisplayApp)
-        app.menu_data_path = Path("dummy")
+def test_loading_complete_logic():
+    """Test if the app correctly consumes data coming back from the thread."""
 
-        # Simulates a directory with 1 jpg and 1 txt
-        files = [Path("photo.jpg"), Path("note.txt")]
-
-        with patch("pathlib.Path.exists", return_value=True), patch(
-            "pathlib.Path.iterdir", return_value=files
-        ), patch("wall_display.pygame.image.load") as mock_load:
-
-            # Execute - call internal method for testing purposes
-            # pylint: disable=protected-access
-            images = app._load_images_from_dir(Path("dummy/dir"))
-
-            # Should only attempt to load the jpg
-            assert mock_load.call_count == 1
-            args, _ = mock_load.call_args
-            assert str(args[0]) == "photo.jpg"
-            # The TXT should be ignored, so the images list should have size 1
-            assert len(images) == 1
-
-
-def test_navigation_logic(menu_data):
-    """Tests the menu index change (UP/DOWN)."""
-    with patch("pathlib.Path.exists", return_value=True), patch(
-        "pathlib.Path.open", mock_open(read_data=menu_data)
-    ), patch("pathlib.Path.iterdir", return_value=[]), patch(
-        "wall_display.WallDisplayApp._generate_menu_surface"
+    with patch(
+        "wall_display.AssetManager.load_menu_structure",
+        return_value=[MenuItem(1, Path("."), "A", "B")],
+    ), patch("wall_display.AssetManager.load_images_threaded", return_value=[]), patch(
+        "wall_display.pygame"
     ):
 
-        app = WallDisplayApp()
+        app = WallDisplayApp(".", "conf.json")
 
-        # Initially index 0
-        assert app.current_item_index == 0
+        # Simulate state: Thread is running
+        app.is_loading = True
 
-        # Simulates the logic of pressing DOWN (increments index)
-        # Copying the run() logic: index = (index + 1) % len
-        app.current_item_index = (app.current_item_index + 1) % len(app.menu_items)
-        # pylint: disable=protected-access
-        app._change_category()
+        # Simulate state: Thread finished and put data in the queue
+        fake_data = [("img.jpg", MagicMock(), MagicMock())]
+        app.loaded_result_queue.append(fake_data)
 
-        assert app.current_item_index == 1
-        assert app.current_item.menu_name == "City"
+        # Run the check method
+        app._check_loading_complete()
 
-        # Simulates pressing DOWN again (returns to 0 - loop)
-        app.current_item_index = (app.current_item_index + 1) % len(app.menu_items)
-        assert app.current_item_index == 0
+        # Assertions
+        assert app.is_loading is False  # Should stop loading
+        assert app.current_img_list == fake_data  # Data should be updated
