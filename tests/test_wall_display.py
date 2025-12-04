@@ -62,7 +62,7 @@ def test_rotate_list_right():
 
 
 @pytest.mark.usefixtures("mock_pygame_fixture")
-def test_app_initialization_success(sample_menu_data):
+def test_app_initialization_success(menu_data):
     """
     Verifies that the app initializes correctly:
     1. Reads the data file.
@@ -70,7 +70,7 @@ def test_app_initialization_success(sample_menu_data):
     3. Configures the screen.
     """
     with patch("pathlib.Path.exists", return_value=True), patch(
-        "pathlib.Path.open", mock_open(read_data=sample_menu_data)
+        "pathlib.Path.open", mock_open(read_data=menu_data)
     ), patch("pathlib.Path.iterdir", return_value=[Path("img1.jpg")]), patch(
         "wall_display.WallDisplayApp._generate_menu_surface"
     ):

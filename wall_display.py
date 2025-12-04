@@ -231,7 +231,7 @@ class WallDisplayApp:
         """Loads valid JPG images from a directory."""
         img_list = []
         if not directory.exists():
-            logging.warning("Directory not found: %s", str(directory))
+            logging.warning("Directory not found: %s", directory)
             return img_list
 
         files = sorted(
@@ -245,7 +245,7 @@ class WallDisplayApp:
                 background.blit(img, (0, 0))
                 img_list.append((file_path.name, img, background))
             except pygame.error:
-                logging.warning("Skipping invalid image: %s", str(file_path.name))
+                logging.warning("Skipping invalid image: %s", file_path.name)
 
         return img_list
 
