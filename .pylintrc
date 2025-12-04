@@ -1,6 +1,7 @@
 [MASTER]
 # List of plugins
 load-plugins=
+init-hook='import sys; sys.path.append(".")'
 
 [MESSAGES CONTROL]
 # Suppress false positives from pygame's dynamic module structure
