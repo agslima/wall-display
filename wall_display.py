@@ -28,7 +28,7 @@ class MenuItem:
     Represents a menu category and its associated images for Wall Display.
     """
 
-    id: int
+    menu_id: int  # CORREÇÃO: mudado de 'id' para 'menu_id'
     directory: Path
     menu_name: str
     description: str
@@ -98,11 +98,15 @@ class WallDisplayApp:
             if self.auto_image_list:
                 self.right_frame_previous = self.auto_image_list[0][2]
 
-        except pygame.error as e:
-            self._fatal_error(1, f"Pygame initialization failed: {e}")
-        except (IOError, ValueError, KeyError) as e:
+        except pygame.error as error:  # CORREÇÃO: mudado de 'e' para 'error'
+            self._fatal_error(1, f"Pygame initialization failed: {error}")
+        except (
+            IOError,
+            ValueError,
+            KeyError,
+        ) as error:  # CORREÇÃO: mudado de 'e' para 'error'
             self._fatal_error(
-                1, f"Unexpected error during setup: {e.__class__.__name__}: {e}"
+                1, f"Unexpected error during setup: {error.__class__.__name__}: {error}"
             )
 
         self._clear_verbose_screen()
@@ -132,7 +136,7 @@ class WallDisplayApp:
 
     def _fatal_error(self, status: int, msg: str) -> None:
         """Logs a fatal error and exits the application."""
-        logging.critical(msg)
+        logging.critical("Fatal Error: %s", msg)
         pygame.quit()
         sys.exit(status)
 
@@ -152,8 +156,10 @@ class WallDisplayApp:
             self._fatal_error(1, f"Menu data file not found: {file_path}")
 
         try:
-            with file_path.open("r", encoding="utf-8") as f:
-                reader = csv.reader(f, delimiter=":")
+            with file_path.open(
+                "r", encoding="utf-8"
+            ) as menu_file:  # CORREÇÃO: 'f' para 'menu_file'
+                reader = csv.reader(menu_file, delimiter=":")
                 for row in reader:
                     # Format: ID:DIR:ENABLED:NAME:DESC
                     if len(row) > 3 and int(row[2]) == 1:
@@ -165,8 +171,8 @@ class WallDisplayApp:
                                 "desc": row[4].strip() if len(row) > 4 else "",
                             }
                         )
-        except IOError as e:
-            self._fatal_error(1, f"Could not read menu file: {e}")
+        except IOError as error:  # CORREÇÃO: 'e' para 'error'
+            self._fatal_error(1, f"Could not read menu file: {error}")
 
         return entries
 
@@ -185,7 +191,7 @@ class WallDisplayApp:
             images = self._load_images_from_dir(img_dir)
 
             menu_item = MenuItem(
-                id=entry["id"],
+                menu_id=entry["id"],  # CORREÇÃO: 'id' para 'menu_id'
                 directory=img_dir,
                 menu_name=entry["name"],
                 description=entry["desc"],
@@ -256,8 +262,10 @@ class WallDisplayApp:
         alpha_range = range(0, 255, 25) if fade_in else range(255, -1, -25)
 
         for alpha in alpha_range:
-            bg = pygame.Surface(self.screen.get_size()).convert()
-            bg.fill(self.BG_COLOR)
+            background = pygame.Surface(
+                self.screen.get_size()
+            ).convert()  # CORREÇÃO: 'bg' para 'background'
+            background.fill(self.BG_COLOR)
 
             img_surface.set_alpha(alpha)
             self.screen.blit(img_surface, (self.MENU_WIDTH, 0))

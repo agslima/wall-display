@@ -4,3 +4,4 @@ pygame>=2.0.0
 pylint==2.14.0
 flake8==4.0.1
 black==24.3.0
+pytest
