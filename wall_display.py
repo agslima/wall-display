@@ -472,4 +472,3 @@ if __name__ == "__main__":
         logging.critical("Application crashed: %s", main_error)
         pygame.quit()
         sys.exit(1)
-        
