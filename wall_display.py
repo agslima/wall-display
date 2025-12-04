@@ -168,14 +168,14 @@ class ViewRenderer:
                     di = pygame.display.Info()
                     self.width = getattr(di, "current_w", 800)
                     self.height = getattr(di, "current_h", 600)
-                except Exception:
+                except (AttributeError, TypeError, pygame.error):
                     self.width, self.height = 800, 600
-        except Exception:
+        except (AttributeError, TypeError):
             try:
                 di = pygame.display.Info()
                 self.width = getattr(di, "current_w", 800)
                 self.height = getattr(di, "current_h", 600)
-            except Exception:
+            except (AttributeError, TypeError, pygame.error):
                 self.width, self.height = 800, 600
 
         self.menu_width = config.get("window", "menu_width")
