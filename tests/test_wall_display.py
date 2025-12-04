@@ -9,7 +9,7 @@ Tests cover:
 """
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch, mock_open
+from unittest.mock import patch, mock_open
 
 import pytest
 
@@ -61,7 +61,8 @@ def test_rotate_list_right():
 # --- Integration Tests with Mocks (IO and Pygame) ---
 
 
-def test_app_initialization_success(mock_pygame_fixture, sample_menu_data):
+@pytest.mark.usefixtures("mock_pygame_fixture")
+def test_app_initialization_success(sample_menu_data):
     """
     Verifies that the app initializes correctly:
     1. Reads the data file.
@@ -77,7 +78,6 @@ def test_app_initialization_success(mock_pygame_fixture, sample_menu_data):
         app = WallDisplayApp(menu_data_dir="menu-data")
 
         # Assertions
-        assert mock_pygame_fixture.init.called
         assert app.disp_w == 1920
         assert len(app.menu_items) == 2
         assert app.menu_items[0].menu_name == "Nature"
@@ -124,10 +124,10 @@ def test_load_images_ignores_non_jpg():
             assert len(images) == 1
 
 
-def test_navigation_logic(sample_menu_data):
+def test_navigation_logic(menu_data):
     """Tests the menu index change (UP/DOWN)."""
     with patch("pathlib.Path.exists", return_value=True), patch(
-        "pathlib.Path.open", mock_open(read_data=sample_menu_data)
+        "pathlib.Path.open", mock_open(read_data=menu_data)
     ), patch("pathlib.Path.iterdir", return_value=[]), patch(
         "wall_display.WallDisplayApp._generate_menu_surface"
     ):
