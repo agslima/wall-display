@@ -165,16 +165,16 @@ class ViewRenderer:
             else:
                 # Attempt to read display info
                 try:
-                    di = pygame.display.Info()
-                    self.width = getattr(di, "current_w", 800)
-                    self.height = getattr(di, "current_h", 600)
+                    display_info = pygame.display.Info()
+                    self.width = getattr(display_info, "current_w", 800)
+                    self.height = getattr(display_info, "current_h", 600)
                 except (AttributeError, TypeError, pygame.error):
                     self.width, self.height = 800, 600
         except (AttributeError, TypeError):
             try:
-                di = pygame.display.Info()
-                self.width = getattr(di, "current_w", 800)
-                self.height = getattr(di, "current_h", 600)
+                display_info = pygame.display.Info()
+                self.width = getattr(display_info, "current_w", 800)
+                self.height = getattr(display_info, "current_h", 600)
             except (AttributeError, TypeError, pygame.error):
                 self.width, self.height = 800, 600
 
@@ -214,6 +214,10 @@ class ViewRenderer:
             )
             text_surf = self.font.render(item.menu_name, True, color)
             self.screen.blit(text_surf, (left_margin, y_pos))
+
+    def draw_static_image(self, surface: pygame.Surface) -> None:
+        """Draws the current image without transition."""
+        self.screen.blit(surface, (self.menu_width, 0))
 
     def draw_spinner(self) -> None:
         """Draws a rotating loading circle."""
@@ -336,9 +340,11 @@ class WallDisplayApp:
                 self.loaded_result_queue.append(results)
 
         # Start Thread
-        t = threading.Thread(target=worker, args=(current_req_id, item.image_paths))
-        t.daemon = True
-        t.start()
+        loader_thread = threading.Thread(
+            target=worker, args=(current_req_id, item.image_paths)
+        )
+        loader_thread.daemon = True
+        loader_thread.start()
 
     def _check_loading_complete(self):
         """Called every frame to check if thread finished."""
@@ -461,8 +467,9 @@ if __name__ == "__main__":
     try:
         app_instance = WallDisplayApp(args.dir, args.config)
         app_instance.run()
-    # pylint: disable=broad-exception-caught
-    except Exception as error:
-        logging.critical("Application crashed: %s", error)
+    # pylint: disable=broad-except
+    except Exception as main_error:
+        logging.critical("Application crashed: %s", main_error)
         pygame.quit()
         sys.exit(1)
+        
