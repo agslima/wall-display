@@ -8,12 +8,13 @@
 
 It handles smooth visual transitions, dynamic content loading, non-blocking image loading, and automated slideshows, making it perfect for events, information kiosks, or digital art galleries.
 
-
+<!--
 ## Demo
 
 ![Wall Display Running](https://via.placeholder.com/800x400.png?text=Place+Your+Screenshot+or+GIF+Here)
 
 > *The system is displaying the "Events" category with the sidebar menu active.*
+-->
 
 ## Features
 
