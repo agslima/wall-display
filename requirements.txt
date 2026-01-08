@@ -9,4 +9,4 @@ coverage
 pytest-mock
 
 # Security reason 
-zipp==3.19.1
+zipp==3.23.0
