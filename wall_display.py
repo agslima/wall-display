@@ -30,9 +30,7 @@ class MenuItem:
     menu_name: str
     description: str
     image_paths: List[Path] = field(default_factory=list)
-    # Note: We no longer store loaded_images here directly to avoid threading conflicts.
-    # Images are managed by the Controller's runtime state.
-
+    
 
 class ConfigManager:
     """Responsibility: Load, validate and provide configuration settings."""
@@ -133,9 +131,6 @@ class AssetManager:
                 # Load image
                 img = pygame.image.load(str(path))
 
-                # Note: .convert() is tricky in threads.
-                # Ideally, we call .convert() on the main thread,
-                # but standard Pygame often allows it if display is initialized.
                 img = img.convert()
 
                 bg_surface = pygame.Surface(img.get_size()).convert()
@@ -154,10 +149,6 @@ class ViewRenderer:
     def __init__(self, screen: pygame.Surface, config: ConfigManager):
         self.screen = screen
         self.config = config
-        # Try to get screen size from the provided surface. If the
-        # returned value is not a proper (width, height) tuple (for
-        # example when tests patch pygame and return MagicMocks),
-        # fall back to pygame.display.Info() or sensible defaults.
         try:
             size = screen.get_size()
             if isinstance(size, (tuple, list)) and len(size) == 2:
@@ -309,7 +300,7 @@ class WallDisplayApp:
         if not self.menu_items:
             sys.exit("No menu data found")
 
-        # Initial load (blocking is fine for startup)
+        # Initial load
         self.current_img_list = self.asset_mgr.load_images_threaded(
             self.menu_items[0].image_paths
         )
@@ -323,8 +314,6 @@ class WallDisplayApp:
         self.current_index = new_index
         self.is_loading = True
         self.loaded_result_queue = []  # Clear previous results
-
-        # Increment ID. If thread finishes and ID doesn't match, we discard result.
         self.load_request_id += 1
         current_req_id = self.load_request_id
 
@@ -391,7 +380,6 @@ class WallDisplayApp:
         colors = self.config_mgr.data["colors"]
 
         while running:
-            # CRITICAL CHANGE: We use tick() instead of wait() to allow animation
             self.clock.tick(self.fps)
 
             # 1. Event Handling
